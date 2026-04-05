@@ -1,5 +1,10 @@
 name: OpenWrt Builder
 
+permissions:
+  actions: write       # 允许取消/删除 workflow runs
+  contents: read       # 允许 checkout 代码
+  pull-requests: read  # 可选
+  
 on:
   repository_dispatch:
   workflow_dispatch:
