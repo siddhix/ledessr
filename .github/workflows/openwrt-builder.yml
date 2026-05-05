@@ -1,10 +1,10 @@
 name: OpenWrt Builder
 
 permissions:
-  actions: write       # 允许取消/删除 workflow runs
-  contents: read       # 允许 checkout 代码
-  pull-requests: read  # 可选
-  
+  actions: write
+  contents: read
+  pull-requests: read
+
 on:
   repository_dispatch:
   workflow_dispatch:
@@ -20,7 +20,6 @@ env:
   UPLOAD_FIRMWARE: true
   UPLOAD_RELEASE: false
   TZ: Asia/Shanghai
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build:
@@ -32,35 +31,54 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v4
 
-    # 2. 缓存 SDK 和 feeds
-    - name: Cache SDK and feeds
-      uses: actions/cache@v4
-      with:
-        path: |
-          ./dl
-          ./feeds
-          ./staging_dir
-        key: ${{ runner.os }}-openwrt-${{ hashFiles('**/feeds.conf.default') }}
+    # 2. 释放磁盘空间（关键！避免编译中途空间不足）
+    - name: Free disk space
+      run: |
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                    /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" \
+                    /usr/share/swift /usr/local/.ghcup
+        sudo docker image prune --all --force
+        sudo apt-get autoremove -y
+        sudo apt-get autoclean
+        df -h
 
-    # 3. 系统环境
+    # 3. 系统环境（补全所有依赖，这是修复 libtool 等工具失败的关键）
     - name: Setup environment
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
-        sudo apt-get -qq update
-        sudo apt-get -qq install build-essential ccache curl git python3 python3-setuptools squashfs-tools unzip vim wget zlib1g-dev gawk gettext libncurses5-dev libncursesw5-dev libssl-dev
+        sudo apt update -y
+        sudo apt full-upgrade -y \
+        sudo apt install -y ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential \
+          bzip2 ccache clang cmake cpio curl device-tree-compiler flex gawk gcc-multilib g++-multilib gettext \
+          genisoimage git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev \
+          libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev \
+          libreadline-dev libssl-dev libtool llvm lrzsz libnsl-dev ninja-build p7zip p7zip-full patch pkgconf \
+          python3 python3-pyelftools python3-setuptools qemu-utils rsync scons squashfs-tools subversion \
+          swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev
         sudo timedatectl set-timezone "$TZ"
         sudo mkdir -p /mnt/workdir
         sudo chown $USER:$GROUPS /mnt/workdir
 
-    # 4. Clone源码
+    # 4. Clone 源码
     - name: Clone source code
       working-directory: /mnt/workdir
       run: |
+        df -hT $PWD
         git clone $REPO_URL -b $REPO_BRANCH openwrt
         ln -sf /mnt/workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
-    # 5. 加载自定义 feeds & DIY 脚本1
+    # 5. 缓存下载包（只缓存 dl，不缓存 staging_dir 避免工具链冲突）
+    - name: Cache downloaded packages
+      uses: actions/cache@v4
+      with:
+        path: ./openwrt/dl
+        key: ${{ runner.os }}-openwrt-dl-${{ hashFiles('**/feeds.conf.default') }}-${{ github.sha }}
+        restore-keys: |
+          ${{ runner.os }}-openwrt-dl-${{ hashFiles('**/feeds.conf.default') }}-
+          ${{ runner.os }}-openwrt-dl-
+
+    # 6. 加载自定义 feeds & DIY 脚本1
     - name: Load custom feeds
       run: |
         [ -e $FEEDS_CONF ] && mv $FEEDS_CONF openwrt/feeds.conf.default
@@ -68,13 +86,14 @@ jobs:
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_P1_SH
 
-    # 6. 更新 & 安装 feeds
+    # 7. 更新 & 安装 feeds
     - name: Update feeds
       run: cd openwrt && ./scripts/feeds update -a
+
     - name: Install feeds
       run: cd openwrt && ./scripts/feeds install -a
 
-    # 7. 加载自定义配置 & DIY 脚本2
+    # 8. 加载自定义配置 & DIY 脚本2
     - name: Load custom configuration
       run: |
         [ -e files ] && mv files openwrt/files
@@ -83,54 +102,74 @@ jobs:
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_P2_SH
 
-    # 8. 下载依赖包
+    # 9. 下载依赖包
     - name: Download packages
       run: |
         cd openwrt
         make defconfig
         make download -j8
+        find dl -size -1024c -exec ls -l {} \;   # 列出下载不完整的文件
+        find dl -size -1024c -exec rm -f {} \;   # 删除下载不完整的文件
 
-    # 9. 编译固件
+    # 10. 编译固件
     - name: Compile firmware
+      id: compile
       run: |
         cd openwrt
-        make -j$(nproc) V=s
+        echo -e "$(nproc) thread compile"
+        make -j$(nproc) || make -j1 V=s   # 多线程失败时自动切换单线程详细日志
+        echo "status=success" >> $GITHUB_OUTPUT
+        grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
+        [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
+        echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
 
-    # 10. 清理旧构建，减少空间占用
-    - name: Clean old builds
-      run: |
-        cd openwrt
-        rm -rf tmp
+    # 11. 编译失败时上传错误日志（方便排查）
+    - name: Upload error log on failure
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-error-log
+        path: |
+          /mnt/workdir/openwrt/build_dir/host/*/config.log
+          /mnt/workdir/openwrt/build_dir/host/*/*.log
+        retention-days: 3
 
-    # 11. 整理固件目录
+    # 12. 检查磁盘空间
+    - name: Check space usage
+      if: (!cancelled())
+      run: df -hT
+
+    # 13. 整理固件目录
     - name: Organize firmware
-      if: env.UPLOAD_FIRMWARE == 'true'
+      id: organize
+      if: env.UPLOAD_FIRMWARE == 'true' && !cancelled()
       run: |
         cd openwrt/bin/targets/*/*
         rm -rf packages
         echo "FIRMWARE=$PWD" >> $GITHUB_ENV
+        echo "status=success" >> $GITHUB_OUTPUT
 
-    # 12. 上传固件
+    # 14. 上传固件
     - name: Upload firmware directory
-      uses: actions/upload-artifact@v4    # ✅ 使用最新 v4
-      if: env.UPLOAD_FIRMWARE == 'true'
+      uses: actions/upload-artifact@v4
+      if: steps.organize.outputs.status == 'success' && !cancelled()
       with:
-        name: OpenWrt_firmware
+        name: OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
         path: ${{ env.FIRMWARE }}
 
-    # 13. 生成 release tag（可选）
+    # 15. 生成 release tag（可选）
     - name: Generate release tag
       id: tag
-      if: env.UPLOAD_RELEASE == 'true'
+      if: env.UPLOAD_RELEASE == 'true' && !cancelled()
       run: |
         echo "release_tag=$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
         touch release.txt
         echo "status=success" >> $GITHUB_OUTPUT
 
-    # 14. 上传固件到 Release（可选）
+    # 16. 上传固件到 Release（可选）
     - name: Upload firmware to release
       uses: softprops/action-gh-release@v1
-      if: env.UPLOAD_RELEASE == 'true'
+      if: steps.tag.outputs.status == 'success' && !cancelled()
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
@@ -138,17 +177,17 @@ jobs:
         body_path: release.txt
         files: ${{ env.FIRMWARE }}/*
 
-    # 15. 清理 workflow 历史
+    # 17. 清理 workflow 历史
     - name: Delete workflow runs
       uses: Mattraks/delete-workflow-runs@v2
       with:
         retain_days: 0
         keep_minimum_runs: 2
 
-    # 16. 删除旧 Releases (使用 master 分支)
+    # 18. 删除旧 Releases（可选）
     - name: Remove old Releases
       uses: dev-drprasad/delete-older-releases@master
-      if: env.UPLOAD_RELEASE == 'true'
+      if: env.UPLOAD_RELEASE == 'true' && !cancelled()
       with:
         keep_latest: 3
         delete_tags: true
