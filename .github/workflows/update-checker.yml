@@ -12,7 +12,7 @@ on:
 
 permissions:
   contents: read
-  actions: write # 给内置GITHUB_TOKEN增加删除运行记录的权限
+  actions: write
 
 jobs:
   check:
@@ -54,7 +54,6 @@ jobs:
           repository: ${{ env.REPO_FULL }}
           event-type: build-openwrt
 
-      # ✅ 删除步骤改用自带 GITHUB_TOKEN，不再依赖gen_token
       - name: Delete old workflow runs
         uses: Mattraks/delete-workflow-runs@v2
         with:
