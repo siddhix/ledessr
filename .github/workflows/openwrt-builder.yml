@@ -6,7 +6,7 @@ permissions:
 
 on:
   repository_dispatch:
-    types: [Source Code Update]
+    types: [build-openwrt]
   workflow_dispatch:
 
 env:
