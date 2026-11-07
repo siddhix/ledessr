@@ -1,13 +1,3 @@
-# https://github.com/P3TERX/Actions-OpenWrt
-#
-# File: .github/workflows/update-checker.yml
-# Description: Source code update checker
-#
-# Copyright (c) 2019-2024 P3TERX <https://p3terx.com>
-#
-# This is free software, licensed under the MIT License.
-# See /LICENSE for more information.
-
 name: Update Checker
 
 env:
@@ -22,6 +12,7 @@ on:
 
 permissions:
   contents: read
+  actions: write # 给内置GITHUB_TOKEN增加删除运行记录的权限
 
 jobs:
   check:
@@ -46,7 +37,6 @@ jobs:
         run: |
           echo ${{ steps.getHash.outputs.commitHash }} > .commit.txt
 
-      # GitHub App 生成临时 token
       - name: Generate GitHub App token
         id: gen_token
         if: steps.cacheHash.outputs.cache-hit != 'true'
@@ -56,8 +46,7 @@ jobs:
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
           repository: ${{ env.REPO_FULL }}
 
-      # ========== P3TERX原版核心：repository-dispatch ==========
-      - name: Trigger build
+      - name: Trigger openwrt build
         if: steps.cacheHash.outputs.cache-hit != 'true'
         uses: peter-evans/repository-dispatch@v2
         with:
@@ -65,9 +54,10 @@ jobs:
           repository: ${{ env.REPO_FULL }}
           event-type: build-openwrt
 
+      # ✅ 删除步骤改用自带 GITHUB_TOKEN，不再依赖gen_token
       - name: Delete old workflow runs
         uses: Mattraks/delete-workflow-runs@v2
         with:
-          token: ${{ steps.gen_token.outputs.token }}
+          token: ${{ secrets.GITHUB_TOKEN }}
           repository: ${{ env.REPO_FULL }}
           retain_days: 1
