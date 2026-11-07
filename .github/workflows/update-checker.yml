@@ -39,11 +39,11 @@ jobs:
 
       - name: Trigger openwrt build
         if: steps.cacheHash.outputs.cache-hit != 'true'
-        uses: peter-evans/repository-dispatch@v2
-        with:
-          token: ${{ secrets.GH_PAT }}
-          repository: ${{ env.REPO_FULL }}
-          event-type: build-openwrt
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          gh api --method POST repos/${{ env.REPO_FULL }}/dispatches -f event_type=build-openwrt
+
 
       - name: Delete old workflow runs
         uses: Mattraks/delete-workflow-runs@v2
