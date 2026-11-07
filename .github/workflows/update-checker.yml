@@ -44,7 +44,6 @@ jobs:
         with:
           app-id: ${{ secrets.GH_APP_ID }}
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
-          repository: ${{ env.REPO_FULL }}
 
       - name: Trigger openwrt build
         if: steps.cacheHash.outputs.cache-hit != 'true'
