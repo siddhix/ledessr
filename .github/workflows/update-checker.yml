@@ -37,19 +37,11 @@ jobs:
         run: |
           echo ${{ steps.getHash.outputs.commitHash }} > .commit.txt
 
-      - name: Generate GitHub App token
-        id: gen_token
-        if: steps.cacheHash.outputs.cache-hit != 'true'
-        uses: actions/create-github-app-token@v1
-        with:
-          app-id: ${{ secrets.GH_APP_ID }}
-          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
-
       - name: Trigger openwrt build
         if: steps.cacheHash.outputs.cache-hit != 'true'
         uses: peter-evans/repository-dispatch@v2
         with:
-          token: ${{ steps.gen_token.outputs.token }}
+          token: ${{ secrets.GH_PAT }}
           repository: ${{ env.REPO_FULL }}
           event-type: build-openwrt
 
