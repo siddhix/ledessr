@@ -37,6 +37,7 @@ jobs:
         run: |
           echo ${{ steps.getHash.outputs.commitHash }} > .commit.txt
 
+      # 原生gh api触发编译，不再使用 peter-evans/repository-dispatch@v2
       - name: Trigger openwrt build
         if: steps.cacheHash.outputs.cache-hit != 'true'
         env:
@@ -44,10 +45,14 @@ jobs:
         run: |
           gh api --method POST repos/${{ env.REPO_FULL }}/dispatches -f event_type=build-openwrt
 
-
-      - name: Delete old workflow runs
-        uses: Mattraks/delete-workflow-runs@v2
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          repository: ${{ env.REPO_FULL }}
-          retain_days: 1
+      # 原生gh api清理旧运行记录，不再使用 Mattraks/delete-workflow-runs@v2
+      - name: Delete old workflow runs (keep latest 1)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # 获取当前workflow id
+          WF_ID=$(gh api repos/${{ env.REPO_FULL }}/actions/workflows | jq -r '.workflows[] | select(.name == "Update Checker") | .id')
+          # 列出所有运行，按时间倒序，跳过最新1条，其余删除
+          gh api repos/${{ env.REPO_FULL }}/actions/workflows/$WF_ID/runs --paginate | jq -r '.workflow_runs[1:] | .[] | .id' | while read -r RUN_ID; do
+            gh api --method DELETE repos/${{ env.REPO_FULL }}/actions/runs/$RUN_ID
+          done
