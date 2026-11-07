@@ -46,12 +46,13 @@ jobs:
       run: |
         echo ${{ steps.getHash.outputs.commitHash }} | tee .commitHash
 
-    - name: Trigger build
+    - name: Trigger build workflow
       if: steps.cacheHash.outputs.cache-hit != 'true'
-      uses: peter-evans/repository-dispatch@v3
+      uses: peter-evans/workflow-dispatch@v2
       with:
         token: ${{ secrets.GH_PAT }}
-        event-type: Source Code Update
+        workflow: build.yml
+        repo: siddhix/ledessr
 
     - name: Delete workflow runs
       uses: Mattraks/delete-workflow-runs@v2
